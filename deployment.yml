@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Deployment
+metadata:
+  name: demo
+  labels:
+    app: demo
+spec:
+  selector:
+    matchLabels:
+      app: demo
+  template:
+    metadata:
+      labels:
+        app: demo
+    spec:
+      containers:
+        - name: demo
+          image: pausebreak11/demo:hello
+          ports:
+            - containerPort: 8888
+          requests: #указываем размер ресурсов запрашиваемых к узле для запуска поды
+            memory: 128M
+            cpu: "0.1"
+            livenessProbe: null
+            httpGet: #проверяем живо ли приложение get запросом через 7 секунд после старта
+              path: /healthz
+              port: 8888
+              initialDelaySeconds: 7
+              periodSeconds: 15
+              tcpSocket: #проверяем живо ли приложение get запросом через 7 секунд после старта
+                port: 8888
+                initialDelaySeconds: 8
+                periodSeconds: 15
+                readinessProbe: #проверяем готово ли приложение к работе путем чтения файла healthy через 9 секунд после старта
+                  exec: null
+                  command:
+                    - cat
+                    - /tmp/healthy
+                  initialDelaySeconds: 9
+                  periodSeconds: 15
+              readinessProbe: # проверяем готово ли прилождение к работе отправив get запрос
+                httpGet: null
+                path: /healthz
+                port: 8888
+                initialDelaySeconds: 10
+                periodSeconds: 15
