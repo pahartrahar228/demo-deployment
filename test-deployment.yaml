@@ -1,0 +1,143 @@
+---
+# Deployment для основного приложения
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  namespace: default
+  labels:
+    app: web-app
+spec:
+  replicas: 4 # По результатам нагрузочного теста - 4 пода справляются с пиковой нагрузкой
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2 # Позволяет постепенно обновлять без простоя
+      maxUnavailable: 1 # Гарантирует доступность во время обновлений
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+    spec:
+      # Настройка распределения подов по зонам
+      topologySpreadConstraints:
+      - maxSkew: 1 # Максимальная разница в количестве подов между зонами
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway # Стараемся распределить по зонам, но если невозможно - всё равно запускаем
+        labelSelector:
+          matchLabels:
+            app: web-app
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname  
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: web-app
+      containers:
+      - name: web-app
+        image: your-web-app:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "128Mi" # Ровное потребление памяти
+            cpu: "50m" # Запрашиваем немного CPU для стабильной работы
+          limits:
+            memory: "256Mi" # Лимит с запасом
+            cpu: "500m" # Лимит для обработки первоначальных пиков
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 8 # Учитываем время инициализации 5-10 секунд
+          periodSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15 # Даём время на полную инициализацию
+          periodSeconds: 10
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          failureThreshold: 30 # 30 попыток × 1 секунда = 30 секунд максимум
+          periodSeconds: 1
+      terminationGracePeriodSeconds: 30 # Достаточно для graceful shutdown
+---
+# Horizontal Pod Autoscaler для автоматического масштабирования по времени суток
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web-app-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web-app
+  minReplicas: 2 # Минимальное количество реплик ночью (экономия ресурсов)
+  maxReplicas: 6 # Максимум на случай неожиданных пиков
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600 # Стабилизация перед уменьшением (10 минут)
+      policies:
+      - type: Percent
+        value: 50 # Максимум 50% подов за раз при уменьшении
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60 # Быстрое масштабирование при увеличении нагрузки
+      policies:
+      - type: Percent
+        value: 100 # Можем увеличить на 100% за раз
+        periodSeconds: 60
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70 # Целевая утилизация CPU
+---
+# Service для доступа к приложению
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app-service
+  namespace: default
+  labels:
+    app: web-app
+spec:
+  selector:
+    app: web-app
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+  sessionAffinity: None
+---
+# Pod Disruption Budget для гарантии доступности во время добровольных простоев
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web-app-pdb
+  namespace: default
+spec:
+  minAvailable: 3 # Гарантируем доступность как минимум 3 подов во время обслуживания
+  selector:
+    matchLabels:
+      app: web-app
+---
+# PriorityClass для обеспечения приоритетного планирования
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: web-app-high-priority
+value: 1000000 # Высокий приоритет
+globalDefault: false
+description: "High priority for web application pods"
